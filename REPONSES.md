@@ -30,4 +30,55 @@ Content-Type: application/json
 { "movieId": 12, "seat": "F7" , "message": "Already reserved this seat."}
 5. Un conflit de réplication (souvent associé à un code HTTP 409 ou une erreur applicative E42) se produit lorsque deux utilisateurs ou appareils modifient le même enregistrement hors ligne avant de se synchroniser.
 C'est que le developpeur d'app qui doit savoir. 
+
+
+## Cas 3 La page d'accueil met 9 secondes
+1. Il envoye tous les produits de 80000 juste pour affiche 12 items sur premier écran et aussi données data depuis DB sans DTO, qui expose tous les infos. 
+2. Envoyer 80000 items dont 12 utilisés et cela peut augmenter les prix de db cloud(supebase), et baisser la performance, et aussi bloque scalabilité pour gérer plus de données avec plus de clients. 
+- Envoyer tous les donnés de produits directement de DB sans DTO peux exposer trop d'infos, cela augmente les risques d'attack contre db. 
+3. 3 Jamais de liste sans limite, 5 Ne envoyer pas que ce que l'ecran affiche
+4. frontend
+    ```
+    GET /v1/products?limit=12&offset=0
+    ```
+    la réponse de l'API
+    ```
+        {
+    "data": [
+        {
+        "id": "101",
+        "name": "Casque audio sans fil",
+        "price": 129.99,
+        } ...
+        // 12 data au total
+    ],
+        "pagination": {
+            "limit": 12,
+            "offset": 0,
+            "total": 80000
+        }
+    }
+
+    ```
+    backend 
+    ```
+    function toProductDto(p) {
+        return {
+            id: p.id,
+            name: p.name,
+            price: p.price,
+        };
+        }
+
+        app.get('/v1/products', async (req, res) => {
+        const limit = Number(req.query.limit) || 12;
+
+        const products = await db.query(
+            'SELECT id, name, price FROM products LIMIT $1',
+            [limit]
+        );
+
+        res.json(products.map(toProductDto));
+        });
+    ```
 ...
