@@ -230,3 +230,32 @@ Un message JSON clair expliquant que le quota est dépassé, sans appeler le fou
 Ils sont consideré de meme adress et seront bloqués avec 429 error Too many request. 
 6. La météo de Lyon change-t-elle toutes les secondes ? Qu'est-ce que ça vous suggère en plus ?
 Non, la météo ne change pas toutes les secondes : une fois les données récupérées, on les garde dans un cache et on ne les met à jour qu'après un certain délai (par exemple 10 minutes), ce qui évite de payer le fournisseur à chaque requête.
+
+## Cas 7 — La mise à jour du 3 mars
+
+**1. Pour chacune des 5 lignes : cassante ou non cassante ? Justifiez en pensant à une appli installée il y a six mois.**
+
+| Changement | Cassante ? | Pourquoi (appli installée il y a six mois) |
+|------------|------------|--------------------------------------------|
+| Ajout du champ `currency` dans la réponse de `GET /v1/accounts/{id}` | | |
+| Le champ `balance` s'appelle maintenant `availableBalance` | | |
+| Suppression du champ `iban` (peu utilisé) | | |
+| Nouveau paramètre obligatoire `reason` sur `POST /v1/transfers` | | |
+| Ajout de la route `GET /v1/accounts/{id}/cards` | | |
+
+**2. Quel dégât concret pour la banque ?**
+
+
+
+**3. Quel principe du cours s'applique ?**
+
+
+
+**4. Réécrivez le plan de mise à jour : qu'est-ce qui peut partir dans la version 1, qu'est-ce qui demande une version 2, et que devient la version 1 ?**
+
+- **Version 1 :**
+- **Version 2 :**
+- **Ce que devient la version 1 :**
+
+**5. Comment obtenir le même résultat métier pour la ligne 2 sans rien casser ?**
+
