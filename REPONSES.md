@@ -81,4 +81,81 @@ C'est que le developpeur d'app qui doit savoir.
         res.json(products.map(toProductDto));
         });
     ```
+ 5. Le front demande 500 000 produits d'un coup. Que fait votre API ?
+ Envoyer BAD Request 400, 422 
+
+ ## Cas 4 Trois dons de 20 €
+1.L'endpoint POST /v1/donations n'est pas idempotent (pas de clé d'idempotence ni de vérification de doublon) et déclenche un débit bancaire à chaque tentative, ce qui fait que les réessais réseau de l'appli créent plusieurs dons et plusieurs débits de 20 €.
+2.Les payments inattendu pour l'utilisateur, il faut remboursement, risque de perte de client, basse de qualité de service. 
+3.Un compteur à l'entrée
+4.Décrivez la solution étape par étape : que fait l'appli, que fait le serveur au premier envoi, que fait-il au deuxième ?
+### 4. Solution étape par étape
+* **Ce que fait l'appli :** elle crée une clé unique (clé d'idempotence) pour ce don et l'envoie avec la requête. En cas de coupure réseau et de réessai, elle **garde exactement la même clé**.
+* **Ce que fait le serveur au 1er envoi :** il enregistre la clé comme « en cours », crée le don, fait le débit bancaire, sauvegarde le résultat, puis renvoie **`201`** avec le don.
+* **Ce que fait le serveur au 2e envoi (avec la même clé) :**
+  * Si c'est **déjà terminé**, il **ne redébite pas** et renvoie directement le résultat déjà enregistré (`201`).
+  * Si c'est **encore en cours**, il **ne redébite pas** non plus et indique que le traitement est déjà en cours.
+    ```
+    app.post('/v1/donations', async (req, res) => {
+    const key = req.header('Idempotency-Key');
+    const userId = req.user.id;
+
+    if (!key) {
+        return res.status(400).json({ error: 'Idempotency-Key header is required' });
+    }
+
+    // 1. Vérifier si cette clé existe déjà pour cet utilisateur
+    const existing = await db.idempotencyKeys.findOne({ key, userId });
+
+    if (existing) {
+        if (existing.status === 'COMPLETED') {
+        // Déjà traité : renvoyer la même réponse sans redébiter
+        return res.status(201).json(existing.response);
+        }
+        // Encore en cours de traitement
+        return res.status(409).json({
+        error: 'REQUEST_IN_PROGRESS',
+        message: 'Traitement déjà en cours pour cette requête.',
+        });
+    }
+
+    // 2. Marquer la clé comme "en cours" avant l'action sensible
+    await db.idempotencyKeys.insert({
+        key,
+        userId,
+        status: 'PROCESSING',
+        response: null,
+    });
+
+    try {
+        // 3. Créer le don et débiter la carte une seule fois
+        const don = await db.donations.insert({
+        cagnotteId: req.body.cagnotteId,
+        montant: req.body.montant,
+        userId,
+        });
+
+        await banque.debiter(req.user.carte, req.body.montant);
+
+        // 4. Sauvegarder le résultat final et renvoyer 201
+        await db.idempotencyKeys.update(
+        { key, userId },
+        { status: 'COMPLETED', response: don }
+        );
+
+        return res.status(201).json(don);
+    } catch (err) {
+        // En cas d'échec, libérer ou marquer la clé en erreur pour permettre un vrai réessai
+        await db.idempotencyKeys.update(
+        { key, userId },
+        { status: 'FAILED' }
+        );
+        throw err;
+    }
+    });
+    ```
+
+5.Regardez l'ordre des deux opérations dans le code. Que se passe-t-il si le débit échoue ?
+Avec le premier code, il ne fait rien. Le code proposé par 4, on va mettre à jour de l'état de 
+clé d'idempotent. 
 ...
