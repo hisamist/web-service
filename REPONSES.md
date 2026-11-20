@@ -240,7 +240,7 @@ Non, la météo ne change pas toutes les secondes : une fois les données récup
 
 | Où est le problème ? | Quel dégât ? (prix, sécurité, scalabilité) | Quel principe du cours ? |
 |----------------------|---------------------------------------------|--------------------------|
-| *(à rédiger)* | Blocage des opérations clients et saturation du support: 4000 appel au support de bank, impossibilité de consulter les information et de faire des virements pour certains clients avec app qui n'est pas mis à jour. Perte de confiance des clients. | On ajoute, on ne casse pas |
+| 3 changements cassants ont été publiés dans la v1, alors que les 200 000 téléphones qui n'ont pas mis à jour l'appli utilisent encore l'ancien format. | Blocage des opérations clients et saturation du support: 4000 appel au support de bank, impossibilité de consulter les information et de faire des virements pour certains clients avec app qui n'est pas mis à jour. Perte de confiance des clients. | On ajoute, on ne casse pas |
 
 **Notre correction :**
 
