@@ -231,31 +231,66 @@ Ils sont consideré de meme adress et seront bloqués avec 429 error Too many re
 6. La météo de Lyon change-t-elle toutes les secondes ? Qu'est-ce que ça vous suggère en plus ?
 Non, la météo ne change pas toutes les secondes : une fois les données récupérées, on les garde dans un cache et on ne les met à jour qu'après un certain délai (par exemple 10 minutes), ce qui évite de payer le fournisseur à chaque requête.
 
-## Cas 7 — La mise à jour du 3 mars
+## Cas 7 La mise à jour du 3 mars
+1. Pour chacune des 5 lignes : cassante ou non cassante ? Justifiez en pensant à une appli installée il y a six mois.
+- Ajout du champ currency dans GET /v1/accounts/{id} : Non cassante. Ajouter un nouveau champ dans la réponse n'empêche pas une appli installée il y a six mois de fonctionner (elle ignore simplement les champs qu'elle ne connaît pas).
+- Renommage de balance en availableBalance : Cassante. L'appli installée il y a six mois attend balance dans le JSON ; si ce champ disparaît ou change de nom, l'affichage du solde échoue.
+- Suppression du champ iban (peu utilisé) : Cassante. Même s'il est peu utilisé, il reste utilisé par certains écrans ou parcours ; le supprimer d'un coup casse ces fonctionnalités pour les clients concernés.
+- Nouveau paramètre obligatoire reason sur POST /v1/transfers : Cassante. Les anciennes versions de l'appli n'envoient pas reason et recevront des erreurs de validation (400 / 422), bloquant les virements.
+- Ajout de la route GET /v1/accounts/{id}/cards : Non cassante. C'est une nouvelle route qui n'altère pas le comportement des routes déjà en place.
+On ajoute, on ne casse pas 
+2. Quel dégât concret pour la banque ?
+Blocage des opérations clients et saturation du support: 4000 appel au support de bank, impossibilité de consulter les information et de faire des virements pour certains clients avec app qui n'est pas mis à jour. Perte de confiance des clients. 
+3. Quel principe du cours s'applique ?
+On ajoute, on ne casse pas
+4. Réécrivez le plan de mise à jour : qu'est-ce qui peut partir dans la version 1, qu'est-ce qui demande une version 2, et que devient la version 1 ?
+Ce qui part dans la version 1 (v1, 100 % rétrocompatible) :
+Ajout du champ currency dans GET /v1/accounts/{id}.
+Ajout de la route GET /v1/accounts/{id}/cards.
+Ajout du paramètre reason sur POST /v1/transfers en optionnel (avec une valeur par défaut côté serveur si l'ancienne appli ne le fournit pas).
 
-**1. Pour chacune des 5 lignes : cassante ou non cassante ? Justifiez en pensant à une appli installée il y a six mois.**
+Ce qui demande une version 2 (v2) :
+Le renommage de balance en availableBalance, la suppression définitive de iban, et l'obligation stricte d'envoyer reason.
 
-| Changement | Cassante ? | Pourquoi (appli installée il y a six mois) |
-|------------|------------|--------------------------------------------|
-| Ajout du champ `currency` dans la réponse de `GET /v1/accounts/{id}` | | |
-| Le champ `balance` s'appelle maintenant `availableBalance` | | |
-| Suppression du champ `iban` (peu utilisé) | | |
-| Nouveau paramètre obligatoire `reason` sur `POST /v1/transfers` | | |
-| Ajout de la route `GET /v1/accounts/{id}/cards` | | |
+Que devient la version 1 ?
+Elle reste active et maintenue pendant une période de transition le temps que les 200 000 téléphones migrent vers la nouvelle version de l'application, avec un avertissement de dépréciation avant son arrêt futur avec date limite. 
 
-**2. Quel dégât concret pour la banque ?**
+5. Comment obtenir le même résultat métier pour la ligne 2 sans rien casser ?
+On conserve balance dans GET /v1/accounts/{id} et on ajoute availableBalance en parallèle avec la même valeur : les anciennes applis continuent de lire balance, tandis que les nouvelles utilisent availableBalance.
 
+## Cas 8 La conversation
+1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.
+Il manque un contrat d'API écrit : sans documentation formelle, le frontend et le backend se sont mis d'accord à l'oral sur un format approximatif ({price, date}), ce qui crée des incohérences sur les noms de champs, les unités et les formats, et provoque des bugs d'affichage côté client.
+2. Quel dégât concret : prix, sécurité ou scalabilité ? Donnez un exemple chiffré ou une situation.
+un dégât de qualité de service / temps perdu (coût humain et bug métier critique)
+Pendant 3 semaines, le front et le back développent en parallèle sur des bases incompatibles. À la mise en commun, tous les écrans affichent 2490 € au lieu de 24,90 € (un prix multiplié par 100 !) et Invalid Date, obligeant les deux équipes à tout reprendre en urgence avant la livraison.
+3. Quel principe du cours s'applique ?
+Le contrat d'API d'abord
+4. Qu'aurait-il fallu produire le premier jour, avant d'écrire une ligne de code ? Décrivez ce document et ce qu'il contient pour cette route.
+Document à produire : Un contrat d'API (spécification OpenAPI / Swagger, en YAML ou JSON) validé ensemble par le front et le back.
+L'URL et la méthode (GET /orders/{id}).
+Ce qu'on envoie (id dans l'URL).
+Ce que le serveur renvoie (amount_cents en centimes, created_at en date ISO).
+Les codes de réponse (200 si ça marche, 404 si la commande n'existe pas).
+```
+# Contrat d'API : GET /orders/{id}
+route: GET /orders/{id}
 
+parametre_url:
+  id: integer (obligatoire, ex: 42)
 
-**3. Quel principe du cours s'applique ?**
+reponses:
+  200_OK:
+    id: integer (ex: 42)
+    amount_cents: integer # en centimes ! 2490 = 24,90 €
+    created_at: string  # format ISO 8601, ex: "2026-11-20T10:00:00Z"
 
-
-
-**4. Réécrivez le plan de mise à jour : qu'est-ce qui peut partir dans la version 1, qu'est-ce qui demande une version 2, et que devient la version 1 ?**
-
-- **Version 1 :**
-- **Version 2 :**
-- **Ce que devient la version 1 :**
-
-**5. Comment obtenir le même résultat métier pour la ligne 2 sans rien casser ?**
-
+  404_Not_Found:
+    error: string (ex: "Commande introuvable")
+```
+5. Relevez tous les malentendus de la conversation. Il y en a au moins quatre.
+Accord flou au départ : Tom donne {price, date} en gros sans préciser noms, types ou formats, et Sarah code dessus.
+Nom du prix : Sarah attend price, le back renvoie amount_cents.
+Unité du prix : Sarah pense recevoir des euros (24.90), le back renvoie des centimes (2490 → affichage 2490 €).
+Nom et format de la date : Sarah attend date, le back renvoie created en timestamp Unix (1795000000 → Invalid Date).
+Changement mal communiqué : Tom a changé le nom lundi à l'oral avec Karim, sans prévenir Sarah ni mettre à jour un contrat.
