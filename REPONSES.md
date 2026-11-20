@@ -4,12 +4,14 @@
 1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.
 - Je trouve que les chemins a de problème comme nommage irregulier(camelcase,snakecase),certains routes inclutent les verbes,delete par POST, GET methode sans utiliser DELETE methode, et manque d'interface uniforme. 
 2. Quel dégât concret : prix, sécurité ou scalabilité ? Donnez un exemple chiffré ou une situation.
-- GET /students,/notes_list sans pagination peut envoyer 5000 items et cela peut augmenter les prix de db cloud(supebase), et baisser la performance, et aussi bloque scalabilité pour gérer plus de données avec plus de clients. 
-- Pour mis à jour de nommages, cele peut empecher les consomateurs de cet API. 
+- **Scalabilité et prix** : `GET /students` ou `/notes_list` sans pagination renvoie les 5 000 éléments à chaque appel. À environ 1 Ko par élément, cela fait 5 Mo par appel ; avec 1 000 appels par jour, on transfère 5 Go par jour pour rien. La facture de la base cloud (Supabase) augmente, les temps de réponse aussi, et la situation empire à chaque nouvel étudiant.
+- **Sécurité** : une suppression déclenchée par un GET peut être lancée par accident (voir question 5).
+- **Compatibilité** : si on corrige les noms des routes du jour au lendemain, toutes les applis qui utilisent déjà l'API cassent. Il faut garder les anciennes routes le temps de la migration, ou publier les nouvelles sous `/v2`.
 3. Quel principe du cours s'applique ?
 - 1 Des noms dans l'URL, l'action dans le verbe
 - 2 Le code HTTP dit la vérité(Utilise GET/POST pour DELETE envoie 200 mais cela pas correspond pas la vérité?)
 - 3 Jamais de liste sans limite 
+- On ajoute, on ne casse pas( Pour mettre à jour de API)
 5. La dernière ligne cache un danger particulier. Lequel ?
   - /getStudentNotes?student=4&delete=true expose ID de student et aussi expose params delete boolean et logique delete interieur.
 **Notre correction :**
@@ -203,3 +205,28 @@ N'envoie pas ce que l'écran affiche
 **5. « Ce n'est pas grave, le front ne les affiche pas. » Que répondez-vous ?**
 
 Dès l'instant où une donnée est incluse dans la réponse JSON, elle est déjà partie sur le réseau : même si l'interface ne l'affiche pas, n'importe qui peut facilement la voir via les outils de développement du navigateur (onglet Réseau), curl ou Postman.
+
+## Cas 6 La facture de mars
+
+1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.
+L'endpoint GET /v1/forecast est ouvert sans authentification ni limitation, n'importe quoi peut acceder et appelle un fournisseur externe payant à chaque requête sans mise en cache, ce qui provoque une explosion des appels quand il y a trop d'access. 
+2. Quel dégât concret : prix, sécurité ou scalabilité ? Donnez un exemple chiffré ou une situation.
+Catégorie principale : Prix (et scalabilité / dépendance externe).
+Exemple chiffré : à 0,002 € par appel :
+10 000 appels/jour = 20 €/jour (600 €/mois).
+Multiplié par 40 (400 000 appels/jour) = 800 €/jour (24 000 €/mois) rien que pour un seul endpoint, sans compter le risque d'atteindre les quotas ou latences du fournisseur externe.
+3. Quel principe du cours s'applique ?
+**Un compteur à l'entrée**, parce que chaque client doit avoir une limite, et qu'au-delà l'API doit répondre `429` **avant** d'appeler la base ou le fournisseur payant.
+**Que mettez-vous en place ? Précisez : qui est compté, quelle limite, et ce que l'API répond quand elle est dépassée.**
+4. Que mettez-vous en place ? Précisez : qui est compté, quelle limite, et ce que l'API répond quand elle est dépassée.
+- Qui est compté : l'adresse IP du client (ou une clé d'API si on identifie les partenaires).
+- Quelle limite : par exemple 60 requêtes par minute par adresse IP (un seuil cohérent avec un usage normal, mais qui bloque le polling à 1 requête/seconde).
+
+- Ce que l'API répond quand la limite est dépassée :
+Le code HTTP 429 Too Many Requests.
+L'en-tête Retry-After (ex. Retry-After: 60) indiquant dans combien de secondes réessayer.
+Un message JSON clair expliquant que le quota est dépassé, sans appeler le fournisseur (donc 0 € facturé).
+5. Vous limitez par adresse IP. Une école de 800 étudiants sort sur Internet avec une seule adresse. Que se passe-t-il ?
+Ils sont consideré de meme adress et seront bloqués avec 429 error Too many request. 
+6. La météo de Lyon change-t-elle toutes les secondes ? Qu'est-ce que ça vous suggère en plus ?
+Non, la météo ne change pas toutes les secondes : une fois les données récupérées, on les garde dans un cache et on ne les met à jour qu'après un certain délai (par exemple 10 minutes), ce qui évite de payer le fournisseur à chaque requête.
