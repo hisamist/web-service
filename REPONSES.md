@@ -32,59 +32,78 @@ Content-Type: application/json
 C'est que le developpeur d'app qui doit savoir. 
 
 
-## Cas 3 La page d'accueil met 9 secondes
-1. Il envoye tous les produits de 80000 juste pour affiche 12 items sur premier écran et aussi données data depuis DB sans DTO, qui expose tous les infos. 
-2. Envoyer 80000 items dont 12 utilisés et cela peut augmenter les prix de db cloud(supebase), et baisser la performance, et aussi bloque scalabilité pour gérer plus de données avec plus de clients. 
-- Envoyer tous les donnés de produits directement de DB sans DTO peux exposer trop d'infos, cela augmente les risques d'attack contre db. 
-3. 3 Jamais de liste sans limite, 5 Ne envoyer pas que ce que l'ecran affiche
-4. frontend
-    ```
-    GET /v1/products?limit=12&offset=0
-    ```
-    la réponse de l'API
-    ```
-        {
-    "data": [
-        {
-        "id": "101",
-        "name": "Casque audio sans fil",
-        "price": 129.99,
-        } ...
-        // 12 data au total
-    ],
-        "pagination": {
-            "limit": 12,
-            "offset": 0,
-            "total": 80000
-        }
-    }
+## Cas 3 — La page d'accueil met 9 secondes
 
-    ```
-    backend 
-    ```
-    function toProductDto(p) {
-        return {
-            id: p.id,
-            name: p.name,
-            price: p.price,
-        };
-        }
+**1. Où est le problème ?**
 
-        app.get('/v1/products', async (req, res) => {
-        const limit = Number(req.query.limit) || 12;
+Il envoie tous les 80 000 produits juste pour afficher 12 items sur le premier écran, et envoie aussi les données depuis la DB sans DTO, ce qui expose toutes les infos.
 
-        const products = await db.query(
-            'SELECT id, name, price FROM products LIMIT $1',
-            [limit]
-        );
+**2. Quel dégât concret ?**
 
-        res.json(products.map(toProductDto));
-        });
-    ```
- 5. Le front demande 500 000 produits d'un coup. Que fait votre API ?
- Envoyer BAD Request 400, 422 
+- Envoyer 80 000 items dont 12 utilisés peut augmenter le prix de la DB cloud (Supabase), baisser la performance, et aussi bloquer la scalabilité pour gérer plus de données avec plus de clients.
+- Envoyer toutes les données des produits directement depuis la DB sans DTO peut exposer trop d'infos, cela augmente les risques d'attaque contre la DB.
 
- ## Cas 4 Trois dons de 20 €
+**3. Quel principe du cours s'applique ?**
+
+- **Principe 3** : Jamais de liste sans limite
+- **Principe 5** : N'envoyer que ce que l'écran affiche
+
+**4. La requête du front et la réponse de l'API**
+
+*Requête du front :*
+
+```http
+GET /v1/products?limit=12&offset=0
+```
+
+*Réponse de l'API :*
+
+```json
+{
+  "data": [
+    {
+      "id": "101",
+      "name": "Casque audio sans fil",
+      "price": 129.99,
+    } ...
+    // 12 data au total
+  ],
+  "pagination": {
+    "limit": 12,
+    "offset": 0,
+    "total": 80000
+  }
+}
+```
+
+*Backend :*
+
+```js
+function toProductDto(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    price: p.price,
+  };
+}
+
+app.get('/v1/products', async (req, res) => {
+  const limit = Number(req.query.limit) || 12;
+
+  const products = await db.query(
+    'SELECT id, name, price FROM products LIMIT $1',
+    [limit]
+  );
+
+  res.json(products.map(toProductDto));
+});
+```
+
+**5. Le front demande 500 000 produits d'un coup. Que fait votre API ?**
+
+Envoyer BAD Request 400, 422
+
+## Cas 4 Trois dons de 20 €
 1.L'endpoint POST /v1/donations n'est pas idempotent (pas de clé d'idempotence ni de vérification de doublon) et déclenche un débit bancaire à chaque tentative, ce qui fait que les réessais réseau de l'appli créent plusieurs dons et plusieurs débits de 20 €.
 2.Les payments inattendu pour l'utilisateur, il faut remboursement, risque de perte de client, basse de qualité de service. 
 3.Un compteur à l'entrée
@@ -155,7 +174,32 @@ C'est que le developpeur d'app qui doit savoir.
     });
     ```
 
-5.Regardez l'ordre des deux opérations dans le code. Que se passe-t-il si le débit échoue ?
+5. Regardez l'ordre des deux opérations dans le code. Que se passe-t-il si le débit échoue ?
 Avec le premier code, il ne fait rien. Le code proposé par 4, on va mettre à jour de l'état de 
 clé d'idempotent. 
-...
+
+## Cas 5
+
+**1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.**
+
+Il envoie les informations privées importantes comme l'IBAN, le password.
+
+**2. Quel dégât concret : prix, sécurité ou scalabilité ? Donnez un exemple chiffré ou une situation.**
+
+Cela amène une grande fuite d'informations de clients et une mauvaise utilisation. Il faut compenser les victimes, et aussi baisse de crédibilité du service, et perte de clients.
+
+**3. Quel principe du cours s'applique ?**
+
+N'envoie pas ce que l'écran affiche
+
+**4. Classez les 8 champs en trois colonnes : visible par tous, réservé au conducteur lui-même, ne sort jamais de l'API.**
+
+| Visible par tous | Réservé au conducteur lui-même | Ne sort jamais de l'API |
+|------------------|--------------------------------|-------------------------|
+| `id`             | `phone`                        | `passwordHash`          |
+| `firstName`      | `homeAddress`                  | `iban`                  |
+| `rating`         | `licenseNumber`                |                         |
+
+**5. « Ce n'est pas grave, le front ne les affiche pas. » Que répondez-vous ?**
+
+Dès l'instant où une donnée est incluse dans la réponse JSON, elle est déjà partie sur le réseau : même si l'interface ne l'affiche pas, n'importe qui peut facilement la voir via les outils de développement du navigateur (onglet Réseau), curl ou Postman.
