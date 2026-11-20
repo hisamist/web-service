@@ -1,0 +1,518 @@
+openapi: 3.1.0
+info:
+  title: API Miamzy
+  version: 1.0.0
+  description: |
+    API de la startup de livraison de repas Miamzy.
+
+    Conventions valables pour toutes les routes :
+    - **Version** : toutes les routes sont sous `/v1`.
+    - **Prix** : entiers en **centimes**, toujours accompagnés d'une devise ISO 4217
+      (`"totalCents": 2490, "currency": "EUR"` = 24,90 €). Jamais de nombre décimal.
+    - **Dates** : chaînes **ISO 8601 en UTC** (`"2026-11-20T18:30:00Z"`). Jamais de timestamp Unix.
+    - **Erreurs** : toutes les erreurs ont la même forme (`Error`), avec un `code` stable
+      pour le code client et un `message` lisible pour l'humain.
+    - **Authentification** : aucune pour l'instant (bloc 2).
+servers:
+  - url: http://localhost:3000
+
+tags:
+  - name: Commandes
+  - name: Paiements
+  - name: Utilisateurs
+
+paths:
+  /v1/orders:
+    get:
+      tags: [Commandes]
+      summary: Lister les commandes
+      description: |
+        Renvoie une page de commandes, de la plus récente à la plus ancienne.
+        Sans paramètre, renvoie les 20 premières. Une `limit` au-delà de 100 est
+        plafonnée à 100 (pas d'erreur). Pour la page suivante, renvoyer le
+        `nextCursor` reçu dans le paramètre `cursor`.
+      operationId: listOrders
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Nombre de commandes par page. Défaut 20, maximum 100 (plafonné au-delà).
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Curseur opaque reçu dans `nextCursor` de la page précédente.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Une page de commandes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+        '400':
+          description: "`limit` n'est pas un entier ≥ 1, ou `cursor` est invalide."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_PARAMETER
+                  message: "Le paramètre limit doit être un entier supérieur ou égal à 1."
+                  details:
+                    - field: limit
+                      issue: "doit être un entier ≥ 1"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/orders/{orderId}:
+    get:
+      tags: [Commandes]
+      summary: Consulter une commande
+      operationId: getOrder
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: La commande demandée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          $ref: '#/components/responses/InvalidId'
+        '404':
+          description: Aucune commande avec cet identifiant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ORDER_NOT_FOUND
+                  message: "La commande 999999 n'existe pas."
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/restaurants/{restaurantId}/orders:
+    post:
+      tags: [Commandes]
+      summary: Créer une commande dans un restaurant
+      description: |
+        Crée une commande au statut `pending`. Le serveur calcule les prix à partir
+        du menu du restaurant : le client n'envoie jamais de prix.
+      operationId: createOrder
+      parameters:
+        - name: restaurantId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+            example:
+              userId: 42
+              items:
+                - menuItemId: 7
+                  quantity: 2
+                - menuItemId: 12
+                  quantity: 1
+      responses:
+        '201':
+          description: Commande créée.
+          headers:
+            Location:
+              description: URL de la commande créée.
+              schema:
+                type: string
+                example: /v1/orders/5001
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '400':
+          description: Corps absent ou JSON illisible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: MALFORMED_JSON
+                  message: "Le corps de la requête n'est pas un JSON valide."
+        '404':
+          description: Le restaurant, l'utilisateur ou un plat n'existe pas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: RESTAURANT_NOT_FOUND
+                  message: "Le restaurant 99 n'existe pas."
+        '422':
+          description: JSON valide mais commande impossible (panier vide, quantité invalide, plat d'un autre restaurant).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: EMPTY_CART
+                  message: "Le panier est vide : ajoutez au moins un plat dans items."
+                  details:
+                    - field: items
+                      issue: "doit contenir au moins 1 élément"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/orders/{orderId}/payments:
+    post:
+      tags: [Paiements]
+      summary: Payer une commande
+      description: |
+        Paie la commande du montant total calculé par le serveur.
+
+        **Idempotence** : l'en-tête `Idempotency-Key` est obligatoire. Il est généré par
+        le client (UUID) et réutilisé tel quel à chaque nouvel essai du même paiement.
+        - Même clé renvoyée : aucun nouveau paiement, la réponse d'origine est renvoyée à l'identique.
+        - Nouvelle clé sur une commande déjà payée : `409`.
+        - Même clé avec un corps différent : `422`.
+      operationId: payOrder
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Identifiant unique du paiement, généré par le client (UUID v4 conseillé).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+          example: 3f6c2a1e-8b4d-4c7a-9e21-5d0f7b8a1c34
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            example:
+              method: card
+      responses:
+        '201':
+          description: Paiement créé, ou réponse d'origine renvoyée pour une clé déjà utilisée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          description: En-tête `Idempotency-Key` absent, ou JSON illisible.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: IDEMPOTENCY_KEY_REQUIRED
+                  message: "L'en-tête Idempotency-Key est obligatoire pour payer une commande."
+        '404':
+          description: La commande n'existe pas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: La commande est déjà payée (avec une autre clé).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: ORDER_ALREADY_PAID
+                  message: "La commande 5001 est déjà payée."
+        '422':
+          description: Cette clé a déjà servi pour un paiement différent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: "Cette Idempotency-Key a déjà été utilisée pour une autre requête."
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /v1/users/{userId}:
+    get:
+      tags: [Utilisateurs]
+      summary: Consulter le profil d'un utilisateur
+      description: |
+        Renvoie uniquement le profil public. L'e-mail, le téléphone et le mot de passe
+        haché ne sortent jamais de l'API.
+      operationId: getUserProfile
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Le profil public.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/InvalidId'
+        '404':
+          description: Aucun utilisateur avec cet identifiant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: USER_NOT_FOUND
+                  message: "L'utilisateur 999 n'existe pas."
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+components:
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    InvalidId:
+      description: L'identifiant n'est pas un entier ≥ 1.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: INVALID_ID
+              message: "L'identifiant doit être un entier supérieur ou égal à 1."
+    TooManyRequests:
+      description: Trop de requêtes. Réessayer après le délai indiqué.
+      headers:
+        Retry-After:
+          description: Nombre de secondes à attendre avant de réessayer.
+          schema:
+            type: integer
+            example: 30
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: RATE_LIMITED
+              message: "Trop de requêtes. Réessayez dans 30 secondes."
+
+  schemas:
+    Error:
+      type: object
+      description: Forme unique de toutes les erreurs de l'API.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Code stable, à utiliser dans le code client.
+              example: ORDER_NOT_FOUND
+            message:
+              type: string
+              description: Explication lisible, qui dit quoi corriger.
+            details:
+              type: array
+              description: Détail par champ, pour les erreurs de validation.
+              items:
+                type: object
+                required: [field, issue]
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+
+    OrderStatus:
+      type: string
+      enum: [pending, paid]
+      description: "`pending` = créée, en attente de paiement ; `paid` = payée."
+
+    OrderItem:
+      type: object
+      required: [menuItemId, name, quantity, unitPriceCents]
+      properties:
+        menuItemId:
+          type: integer
+        name:
+          type: string
+          example: Burger végétarien
+        quantity:
+          type: integer
+          minimum: 1
+        unitPriceCents:
+          type: integer
+          description: Prix unitaire en centimes, au moment de la commande.
+          example: 1190
+
+    Order:
+      type: object
+      required: [id, restaurantId, userId, status, items, totalCents, currency, createdAt]
+      properties:
+        id:
+          type: integer
+          example: 5001
+        restaurantId:
+          type: integer
+          example: 3
+        userId:
+          type: integer
+          example: 42
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        totalCents:
+          type: integer
+          description: Total en centimes.
+          example: 2490
+        currency:
+          type: string
+          description: Code devise ISO 4217.
+          example: EUR
+        createdAt:
+          type: string
+          format: date-time
+          description: Date de création, ISO 8601 UTC.
+          example: '2026-11-20T18:30:00Z'
+
+    OrderSummary:
+      type: object
+      description: Version courte d'une commande pour les listes (sans le détail des plats).
+      required: [id, restaurantId, status, totalCents, currency, createdAt]
+      properties:
+        id:
+          type: integer
+        restaurantId:
+          type: integer
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        totalCents:
+          type: integer
+        currency:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    OrderPage:
+      type: object
+      required: [data, nextCursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderSummary'
+        nextCursor:
+          type: [string, 'null']
+          description: À passer dans `cursor` pour la page suivante ; `null` s'il n'y a plus de page.
+          example: eyJpZCI6NDk4MX0
+
+    CreateOrderRequest:
+      type: object
+      required: [userId, items]
+      properties:
+        userId:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [menuItemId, quantity]
+            properties:
+              menuItemId:
+                type: integer
+                minimum: 1
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 50
+
+    PaymentRequest:
+      type: object
+      required: [method]
+      properties:
+        method:
+          type: string
+          enum: [card]
+          description: Moyen de paiement (simulé).
+
+    Payment:
+      type: object
+      required: [id, orderId, amountCents, currency, status, createdAt]
+      properties:
+        id:
+          type: integer
+          example: 812
+        orderId:
+          type: integer
+          example: 5001
+        amountCents:
+          type: integer
+          description: Montant débité, en centimes.
+          example: 2490
+        currency:
+          type: string
+          example: EUR
+        status:
+          type: string
+          enum: [succeeded]
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-20T18:31:02Z'
+
+    UserProfile:
+      type: object
+      description: Profil public. Aucun e-mail, téléphone ni mot de passe.
+      required: [id, firstName, createdAt]
+      properties:
+        id:
+          type: integer
+          example: 42
+        firstName:
+          type: string
+          example: Léa
+        createdAt:
+          type: string
+          format: date-time
+          example: '2025-03-14T09:12:00Z'
