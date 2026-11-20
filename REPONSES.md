@@ -180,7 +180,7 @@ Envoyer BAD Request 400, 422
 Avec le premier code, il ne fait rien. Le code proposé par 4, on va mettre à jour de l'état de 
 clé d'idempotent. 
 
-## Cas 5
+## Cas 5 La fiche du conducteur
 
 **1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.**
 
@@ -294,3 +294,26 @@ Nom du prix : Sarah attend price, le back renvoie amount_cents.
 Unité du prix : Sarah pense recevoir des euros (24.90), le back renvoie des centimes (2490 → affichage 2490 €).
 Nom et format de la date : Sarah attend date, le back renvoie created en timestamp Unix (1795000000 → Invalid Date).
 Changement mal communiqué : Tom a changé le nom lundi à l'oral avec Karim, sans prévenir Sarah ni mettre à jour un contrat.
+
+## Cas 9 Le test qui dit toujours oui
+1. Où est le problème ? Décrivez-le en une phrase, comme à un collègue.
+Ce test vérifie uniquement le statut 200 sans contrôler le montant final ni les conditions d'application de la remise, ce qui produit un « faux vert » et masque le double calcul de la réduction en production.
+2. Quel dégât concret : prix, sécurité ou scalabilité ? Donnez un exemple chiffré ou une situation.
+- Le prix direct : si un panier fait 50 € avec -10 %, il doit passer à 45 €. Là, comme la remise passe deux fois (50 × 0,9 × 0,9), le client paie 40,50 € : tu perds 4,50 € à chaque commande (soit 450 € envolés sur 100 commandes).
+- les faux verts font perdre confiance dans les tests au moment de déployer
+3. Quel principe du cours s'applique ?
+Ce qui n'est pas testé est déjà cassé
+4. Réécrivez ce test pour qu'il attrape le bug.
+```
+    test('applique une seule fois -10 % sur un panier à 50 € (total 45 €)', async () => {
+    const res = await api.post('/v1/carts/7/checkout', { promoCode: 'BIENVENUE10' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.subtotal).toBe(50);
+    expect(res.body.discountAmount).toBe(5);
+    expect(res.body.total).toBe(45); // Tombe en échec si ça sort 40,50 €
+    });
+```
+5. Citez deux autres cas qu'il faudrait tester sur cette route.
+- Vérifier qu'un code déjà utilisé ou des conditions non respectées n'appliquent pas la remise (ou ne la doublent pas).
+- Vérifier qu'un code faux ou expiré, ou l'accès par un mauvais utilisateur, renvoie bien une erreur.
